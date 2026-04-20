@@ -1,0 +1,4 @@
+interface:
+  display_name: "Lab Data Access"
+  short_description: "Inspect mouse experiment data folders."
+  default_prompt: "Use $lab-data-access to locate an experiment from userID and expID, inspect its files, and summarize the trial, recordings, and cut-data schema."
