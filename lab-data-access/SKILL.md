@@ -84,6 +84,11 @@ Use `references/data-layout.md` for the observed schema and known variations.
 
 - Processed calcium recordings in `recordings/s2p_ch*.pickle` can include `OriginalSuite2pCellIDs`, a row-aligned array mapping each processed neuron row back to its original Suite2p ROI index.
 - Expect `recordings/s2p_ch0.pickle` to hold continuous neural traces with time vector `t`.
+- In multi-channel Suite2p experiments, ROI detection outputs and extracted traces are commonly split by functional channel:
+  - the first/green functional channel uses the root `suite2p/planeN/` tree
+  - the second/red functional channel uses the parallel `ch2/suite2p/planeN/` tree
+  - inspect `ops.npy` for `nchannels` and `functional_chan` to confirm which tree was processed as channel 1 or channel 2
+  - only assume the binary for that channel is available in its channel-specific tree; inspect the plane directory before assuming `data.bin` or `data_chan2.bin` exists there
 - Expect `recordings/wheel.pickle` to hold continuous wheel traces with time vector `t`.
 - Expect `recordings/dlcEyeLeft_resampled.pickle` and `recordings/dlcEyeRight_resampled.pickle` to hold eye traces already aligned to Timeline time.
 - Treat `recordings/s2p_tokenised_ch0.pickle` as optional.
@@ -166,6 +171,52 @@ Current preprocessing detects and filters sync pulses as follows.
 - The current maximum interval is effectively unbounded in preprocessing.
 - The last detected pulse should not be excluded just because there is no following interval available.
 - BV CSV-derived flips are filtered to stay consistent with Timeline Bonvision flips, so Bonvision-side filtering is partly constrained by Timeline-derived timing.
+
+
+## Sleep Scoring Data
+
+- Sleep scoring outputs are stored in the processed experiment directory, not the raw repository root.
+- When processed paths are available, inspect `exp_dir_processed/sleep_score/` for sleep-state products.
+- The canonical hypnogram file is:
+  - `sleep_state.pickle`
+  - or `sleep_state_sim.pickle` when simulated EEG/EMG mode was used
+- Treat these files as Python pickles containing whole-experiment sleep-state annotations and derived features.
+- Also treat `sleep_score/figs/` as optional QC output only; figures are not the authoritative sleep-state source.
+
+## Sleep State Schema
+
+- Expect `sleep_state*.pickle` to contain downsampled continuous traces and epoch-level state labels.
+- Common required keys observed in this repo are:
+  - `emg_rms_10hz`, `emg_rms_10hz_t`
+  - `wheel_10hz`, `wheel_10hz_t`
+  - `face_motion_10hz`, `face_motion_10hz_t`
+  - `eeg_10hz`, `eeg_10hz_t`
+  - `epoch_t`
+  - `theta_power`, `delta_power`
+  - `eeg_spectrogram`, `eeg_spectrogram_freqs`, `eeg_spectrogram_t`
+  - `state_epoch`, `state_epoch_t`
+  - `state_10hz`, `state_10hz_t`
+  - `epoch_features`
+- Common metadata and thresholds include:
+  - `state_labels`
+  - `emg_rms_threshold`
+  - `theta_ratio_threshold` and sometimes the alias `theta_delta_ratio_threshold`
+  - `low_freq_threshold` and sometimes the alias `delta_power_threshold`
+  - `locomotion_threshold`
+  - `delta_band`, `theta_band`, `low_freq_max_hz`
+  - optional GUI edits such as `left_video_crop`, `right_video_crop`
+- In this repo, `state_epoch` is the epoch-wise hypnogram and `state_10hz` is the nearest-neighbor interpolation of that hypnogram onto the 10 Hz timeline.
+- Treat `epoch_features` as cached per-epoch features for fast rescoring, not as the authoritative state labels themselves.
+
+## Sleep State Analysis Guidance
+
+- Use `sleep_state*.pickle` as the authoritative source for whole-recording sleep-state labels.
+- For state-dependent continuous analyses, align continuous signals to either:
+  - `state_10hz_t` with `state_10hz` for 10 Hz analyses
+  - `state_epoch_t` with `state_epoch` for epoch-wise analyses
+- When summarizing the file, report array shapes for `state_epoch`, `state_10hz`, and the major trace/time pairs.
+- When both `sleep_state.pickle` and `sleep_state_sim.pickle` exist, do not mix them; state clearly which one is being analyzed.
+- If thresholds are relevant to the analysis, report both the stored threshold keys and any aliasing, for example `theta_ratio_threshold` versus `theta_delta_ratio_threshold`.
 
 ## Cut Data Guidance
 
