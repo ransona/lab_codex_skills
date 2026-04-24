@@ -207,6 +207,11 @@ Current preprocessing detects and filters sync pulses as follows.
   - optional GUI edits such as `left_video_crop`, `right_video_crop`
 - In this repo, `state_epoch` is the epoch-wise hypnogram and `state_10hz` is the nearest-neighbor interpolation of that hypnogram onto the 10 Hz timeline.
 - Treat `epoch_features` as cached per-epoch features for fast rescoring, not as the authoritative state labels themselves.
+- In this repo, the numeric sleep-state mapping is:
+  - `0` = active wake
+  - `1` = quiet wake
+  - `2` = NREM
+  - `3` = REM
 
 ## Sleep State Analysis Guidance
 
