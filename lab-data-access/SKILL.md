@@ -5,7 +5,7 @@ description: Locate and inspect mouse neural and behavioural experiment data sto
 
 # Lab Data Access
 
-Resolve an experiment path from `userID` and `expID`, inspect the files that exist, describe the schema conservatively, and extract trial subsets from the trial table when needed.
+Resolve an experiment path from `userID` and `expID`, inspect the files that exist, describe the schema conservatively, and extract trial subsets from the trial table when needed. The current canonical pipeline is `lab_pipeline`; legacy `preprocess_py` / `preprocess_scripts` paths are reference material only unless the user explicitly asks about them.
 
 Prefer the canonical `lab_pipeline` path resolver over hand-built paths whenever possible:
 
@@ -29,7 +29,8 @@ The canonical repo is `/home/adamranson/code/lab_pipeline`. Its runnable apps pr
 5. Report optional or version-specific files explicitly.
 6. When asked for trial subsets, filter the trial CSV first and then apply the resulting trial indices to cut arrays.
 7. If the user is starting a stimulus-aligned trial analysis, first check whether the needed `cut/` trial snippets already exist.
-8. If the required cut traces are not present, warn clearly that stimulus-aligned trial analysis should not proceed from raw continuous data by default, suggest running pipeline step 2, and stop short of attempting alignment unless the user explicitly asks for alignment work.
+8. If the required cut traces are not present, warn clearly that stimulus-aligned trial analysis should not proceed from raw continuous data by default, suggest running pipeline Step 2, and stop short of attempting alignment unless the user explicitly asks for alignment work.
+9. If the data were processed locally, analyze the local processed root, not the local raw TIFF folder. Local raw folders may contain only TIFFs and ScanImage metadata.
 
 If you need a quick machine-readable summary, run `scripts/inspect_experiment.py`.
 
@@ -52,10 +53,39 @@ Canonical resolver:
   - `exp_dir_raw = /data/Remote_Repository/[animalID]/[expID]`
 - Habituation behavior:
   - if `userID.lower() == "habit"`, processed and raw paths both resolve under `/data/common/habituation/[animalID]/[expID]`.
+- Local split-root behavior:
+  - pass `local_raw_repository_root=RAW_ROOT`, `local_processed_repository_root=PROCESSED_ROOT`, and optionally `local_nas_repository_root=NAS_ROOT` to `find_paths()`, or set the corresponding environment variables.
+  - `exp_dir_processed` resolves to `PROCESSED_ROOT/[animalID]/[expID]`.
+  - `exp_dir_raw` resolves to `RAW_ROOT/[animalID]/[expID]` when that local raw experiment folder exists.
+  - named raw metadata files can fall back to `NAS_ROOT/[animalID]/[expID]` via `paths.raw_file_path(...)`.
+  - this is the preferred non-server/Windows processing layout.
 - Local single-root behavior:
   - pass `local_repository_root=ROOT` to `find_paths()`, or set `LAB_PIPELINE_LOCAL_REPOSITORY_ROOT=ROOT`.
   - raw and processed paths both resolve to `ROOT/[animalID]/[expID]`.
-  - this is intended for local Windows/non-server processing where all data live in one repository tree.
+  - this is retained for compatibility, but avoid it when raw folders are synced back to the server.
+
+For local Windows workstations, typical roots are:
+
+```python
+local_raw_repository_root = r"D:\data\Repository"
+local_processed_repository_root = r"D:\processed\Repository"
+local_nas_repository_root = r"\\ar-lab-nas1\DataServer\Remote_Repository"
+```
+
+When doing analysis on local outputs, set the resolver context first:
+
+```python
+from preprocess_pipeline.shared import paths
+
+with paths.local_repository_context(
+    local_raw_repository_root=r"D:\data\Repository",
+    local_processed_repository_root=r"D:\processed\Repository",
+    local_nas_repository_root=r"\\ar-lab-nas1\DataServer\Remote_Repository",
+):
+    animalID, remote_repository_root, processed_root, exp_dir_processed, exp_dir_raw = paths.find_paths(userID, expID)
+```
+
+Use `exp_dir_processed` for `recordings/`, `cut/`, `suite2p/`, and `step2_config.pickle`. Use `paths.raw_file_path(userID, expID, filename, exp_dir_raw=exp_dir_raw)` for raw metadata that may be on NAS rather than in the local TIFF-only folder.
 
 External user scripts should use one of:
 
@@ -71,6 +101,8 @@ pip install -e /home/[username]/code/lab_pipeline
 
 ## Platform-Specific Repository Rules
 
+- `lab_pipeline` is the active pipeline repo. Use `/home/adamranson/code/lab_pipeline/src/preprocess_pipeline/...` modules for current behavior.
+- Old repos and the `legacy/` tree are historical references unless the user explicitly asks about the old path.
 - On Windows workstations for this lab setup, schemas are accessed from `\\ar-lab-nas1\DataServer\opto_schemas`.
 - On Ubuntu workstations for this lab setup, schemas are accessed from `/mnt/nas2/opto_schemas`.
 - Imaging-to-photostim ROI target import from experiment pixel coordinates is supported on Ubuntu only, not on Windows.
@@ -78,6 +110,7 @@ pip install -e /home/[username]/code/lab_pipeline
 - For P1 imaging, expect ROI-target raw imaging data under `/data/Remote_Repository/[animalID]/[expID]/P1/[roi name]`.
 - Suite2p configs can be stored in shared user-specific folders under `/data/common/configs/s2p_configs/[userID]`.
 - For `adamranson`, expect Suite2p configs under `/data/common/configs/s2p_configs/adamranson`.
+- For local Windows Step 1 runs, Suite2p ops/config files are expected under `F:\s2p_ops\[userID]` unless `suite2p_config_root` or `LAB_PIPELINE_S2P_CONFIG_ROOT` overrides this.
 
 - Expect `expID` to look like `YYYY-MM-DD_NN_ANIMALID`.
 - Infer `animalID` as the third underscore-delimited field when not using `paths.find_paths()`.
@@ -88,10 +121,13 @@ pip install -e /home/[username]/code/lab_pipeline
 
 Inspect these items in this order:
 
+- Resolved `exp_dir_processed` and `exp_dir_raw`, especially when local split roots are active
 - Root-level `*_all_trials.csv`
 - Root-level config pickles such as `pipeline_config.pickle` and `step2_config.pickle`
 - `recordings/` for continuous aligned signals
 - `cut/` for per-trial snippets
+
+For local split-root runs, `*_all_trials.csv` may exist in the processed root after Step 2. If it is missing there, inspect the raw path and then the NAS fallback path via `paths.raw_file_path(...)`.
 
 Use `references/data-layout.md` for the observed schema and known variations.
 
@@ -133,6 +169,8 @@ Use `references/data-layout.md` for the observed schema and known variations.
 
 ## Recording Guidance
 
+- Locally processed Step 1 logs live under `<local_processed_repository_root>/_pipeline_jobs/logs/`. The filtered log is `<job_id>.txt` and the full subprocess log is `<job_id>.raw.txt`.
+- Local Step 2 writes `step2_config.pickle` into the local processed experiment root and writes outputs under that same processed root.
 - Processed calcium recordings in `recordings/s2p_ch*.pickle` can include `OriginalSuite2pCellIDs`, a row-aligned array mapping each processed neuron row back to its original Suite2p ROI index.
 - Expect `recordings/s2p_ch0.pickle` to hold continuous neural traces with time vector `t`.
 - Per-plane Suite2p folders can also contain saved Timeline-derived microscope frame timing arrays:
@@ -410,3 +448,16 @@ python scripts/inspect_experiment.py --userID melinatimplalexi --expID 2025-08-2
 ```
 
 The script resolves the root path, prints the trial CSV header and a small preview, then summarizes representative files in `recordings/` and `cut/`.
+
+For locally processed data, pass the split roots:
+
+```bash
+python scripts/inspect_experiment.py \
+  --userID adamranson \
+  --expID 2026-05-17_02_ESYB040 \
+  --local-raw-repository-root "D:\data\Repository" \
+  --local-processed-repository-root "D:\processed\Repository" \
+  --local-nas-repository-root "\\ar-lab-nas1\DataServer\Remote_Repository"
+```
+
+The helper reports both processed and raw roots when `lab_pipeline` is importable.

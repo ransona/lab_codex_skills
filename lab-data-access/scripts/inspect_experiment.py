@@ -3,11 +3,13 @@ import argparse
 import csv
 import os
 import pickle
+import sys
 from pathlib import Path, PureWindowsPath
 
 import numpy as np
 
 MOVIE_FRAME_ROOT = Path("/home/adamranson/data/vid_for_decoder/cinematic_clips")
+DEFAULT_LAB_PIPELINE_SRC = Path("/home/adamranson/code/lab_pipeline/src")
 
 
 def derive_animal_id(exp_id: str) -> str:
@@ -17,9 +19,29 @@ def derive_animal_id(exp_id: str) -> str:
     return parts[2]
 
 
-def resolve_root(user_id: str, exp_id: str) -> Path:
+def resolve_legacy_processed_root(user_id: str, exp_id: str) -> Path:
     animal_id = derive_animal_id(exp_id)
     return Path("/home") / user_id / "data" / "Repository" / animal_id / exp_id
+
+
+def resolve_roots(args):
+    if DEFAULT_LAB_PIPELINE_SRC.exists():
+        sys.path.insert(0, str(DEFAULT_LAB_PIPELINE_SRC))
+
+    try:
+        from preprocess_pipeline.shared import paths
+    except Exception:
+        root = resolve_legacy_processed_root(args.userID, args.expID)
+        return root, None
+
+    with paths.local_repository_context(
+        local_repository_root=args.local_repository_root,
+        local_raw_repository_root=args.local_raw_repository_root,
+        local_processed_repository_root=args.local_processed_repository_root,
+        local_nas_repository_root=args.local_nas_repository_root,
+    ):
+        _, _, _, exp_dir_processed, exp_dir_raw = paths.find_paths(args.userID, args.expID)
+    return Path(exp_dir_processed), Path(exp_dir_raw)
 
 
 def summarise_value(value):
@@ -131,12 +153,18 @@ def main():
     parser.add_argument("--csv-rows", type=int, default=3)
     parser.add_argument("--filter-column")
     parser.add_argument("--filter-value")
+    parser.add_argument("--local-repository-root")
+    parser.add_argument("--local-raw-repository-root")
+    parser.add_argument("--local-processed-repository-root")
+    parser.add_argument("--local-nas-repository-root")
     args = parser.parse_args()
 
-    root = resolve_root(args.userID, args.expID)
-    print(f"root: {root}")
+    root, raw_root = resolve_roots(args)
+    print(f"processed_root: {root}")
+    if raw_root is not None:
+        print(f"raw_root: {raw_root}")
     if not root.exists():
-        raise SystemExit(f"Experiment root does not exist: {root}")
+        raise SystemExit(f"Processed experiment root does not exist: {root}")
 
     csv_path = root / f"{args.expID}_all_trials.csv"
     print_section("trial csv")

@@ -7,13 +7,27 @@ This reference records the layout observed in two inspected experiments:
 
 Use this as a schema guide for the fixed repository convention used by this lab. Individual files can still vary.
 
-## Root Path Convention
+## Processed Root Path Convention
 
-Root path pattern:
+Server processed root pattern:
 
 ```text
 /home/{userID}/data/Repository/{animalID}/{expID}
 ```
+
+Local processed root pattern:
+
+```text
+{local_processed_repository_root}/{animalID}/{expID}
+```
+
+For local Windows processing in this lab, the common processed root is:
+
+```text
+D:\processed\Repository\{animalID}\{expID}
+```
+
+The local raw root may contain only TIFFs and ScanImage metadata. For analysis, inspect the processed root first.
 
 `animalID` extraction:
 
