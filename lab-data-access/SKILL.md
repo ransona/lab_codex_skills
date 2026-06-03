@@ -133,6 +133,10 @@ Use `references/data-layout.md` for the observed schema and known variations.
 
 ## Trial Table Guidance
 
+- Use CSV files to determine trial conditions and stimulus parameters, not the MATLAB `.mat` stimulus file.
+- The primary trial-condition source is the processed/root-level `*_all_trials.csv`.
+- Use `*_stim.csv`, `*_stim_order.csv`, `*_FrameEvents.csv`, and `*_Encoder.csv` when lower-level BonVision details are needed.
+- Treat `*_stim.mat` as an implementation/intermediate file for preprocessing, not as the analysis source for trial conditions.
 - Treat `time` as trial start time in Timeline time.
 - Treat `stim` as the stimulus configuration ID shown on that trial.
 - Treat `duration` as trial duration.
@@ -159,7 +163,7 @@ Use `references/data-layout.md` for the observed schema and known variations.
 
 ## Trial Subsets
 
-- Build subsets from the trial CSV, not from assumptions about stimulus numbering alone.
+- Build subsets from the trial CSV, not from assumptions about stimulus numbering alone and not from `*_stim.mat`.
 - Return or preserve the original row indices so cut arrays can be indexed consistently.
 - Common filters include `stim`, `F1_type`, `F2_type`, feature parameters such as `F1_angle`, and time windows derived from `time` or `duration`.
 - If a feature column is missing in a given experiment, report that clearly instead of fabricating an empty subset.
