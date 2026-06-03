@@ -7,30 +7,81 @@ description: Locate and inspect mouse neural and behavioural experiment data sto
 
 Resolve an experiment path from `userID` and `expID`, inspect the files that exist, describe the schema conservatively, and extract trial subsets from the trial table when needed.
 
+Prefer the canonical `lab_pipeline` path resolver over hand-built paths whenever possible:
+
+```python
+from preprocess_pipeline.shared import paths
+
+animalID, remote_repository_root, processed_root, exp_dir_processed, exp_dir_raw = paths.find_paths(
+    userID,
+    expID,
+)
+```
+
+The canonical repo is `/home/adamranson/code/lab_pipeline`. Its runnable apps prepend `src/` to `sys.path`, but external scripts need either `PYTHONPATH=/home/[username]/code/lab_pipeline/src` or `pip install -e /home/[username]/code/lab_pipeline` in the active environment.
+
 ## Workflow
 
-1. Resolve the root path as `/home/{userID}/data/Repository/{animalID}/{expID}`.
-2. Derive `animalID` from the experiment ID suffix. For IDs like `2025-08-28_03_ESPM171`, use `ESPM171`.
-3. Inspect the root, `recordings/`, and `cut/` instead of assuming every file exists.
+1. Resolve paths with `preprocess_pipeline.shared.paths.find_paths(userID, expID)` when `lab_pipeline` is available.
+2. Derive `animalID` from the experiment ID suffix only as a fallback or sanity check. For IDs like `2025-08-28_03_ESPM171`, use `ESPM171`.
+3. Inspect the processed experiment root, raw experiment root, `recordings/`, and `cut/` instead of assuming every file exists.
 4. Read the trial CSV header before interpreting trial features.
 5. Report optional or version-specific files explicitly.
 6. When asked for trial subsets, filter the trial CSV first and then apply the resulting trial indices to cut arrays.
+7. If the user is starting a stimulus-aligned trial analysis, first check whether the needed `cut/` trial snippets already exist.
+8. If the required cut traces are not present, warn clearly that stimulus-aligned trial analysis should not proceed from raw continuous data by default, suggest running pipeline step 2, and stop short of attempting alignment unless the user explicitly asks for alignment work.
 
 If you need a quick machine-readable summary, run `scripts/inspect_experiment.py`.
 
 ## Path Rules
 
+Canonical resolver:
+
+- Import from `preprocess_pipeline.shared import paths`.
+- Call `paths.find_paths(userID, expID)`.
+- It returns:
+  - `animalID`
+  - `remote_repository_root`
+  - `processed_root`
+  - `exp_dir_processed`
+  - `exp_dir_raw`
+- Standard server behavior:
+  - `remote_repository_root = /data/Remote_Repository`
+  - `processed_root = /home/[userID]/data/Repository`
+  - `exp_dir_processed = /home/[userID]/data/Repository/[animalID]/[expID]`
+  - `exp_dir_raw = /data/Remote_Repository/[animalID]/[expID]`
+- Habituation behavior:
+  - if `userID.lower() == "habit"`, processed and raw paths both resolve under `/data/common/habituation/[animalID]/[expID]`.
+- Local single-root behavior:
+  - pass `local_repository_root=ROOT` to `find_paths()`, or set `LAB_PIPELINE_LOCAL_REPOSITORY_ROOT=ROOT`.
+  - raw and processed paths both resolve to `ROOT/[animalID]/[expID]`.
+  - this is intended for local Windows/non-server processing where all data live in one repository tree.
+
+External user scripts should use one of:
+
+```bash
+PYTHONPATH=/home/[username]/code/lab_pipeline/src python my_script.py
+```
+
+or:
+
+```bash
+pip install -e /home/[username]/code/lab_pipeline
+```
+
 ## Platform-Specific Repository Rules
 
 - On Windows workstations for this lab setup, schemas are accessed from `\\ar-lab-nas1\DataServer\opto_schemas`.
-- On Ubuntu workstations for this lab setup, schemas are accessed from `/mnt/opto_schemas`.
+- On Ubuntu workstations for this lab setup, schemas are accessed from `/mnt/nas2/opto_schemas`.
 - Imaging-to-photostim ROI target import from experiment pixel coordinates is supported on Ubuntu only, not on Windows.
 - On Ubuntu, raw TIFF data for ROI-target lookup is stored under `/data/Remote_Repository/[animalID]/[expID]/[path name]/[roi name]`.
 - For P1 imaging, expect ROI-target raw imaging data under `/data/Remote_Repository/[animalID]/[expID]/P1/[roi name]`.
+- Suite2p configs can be stored in shared user-specific folders under `/data/common/configs/s2p_configs/[userID]`.
+- For `adamranson`, expect Suite2p configs under `/data/common/configs/s2p_configs/adamranson`.
 
 - Expect `expID` to look like `YYYY-MM-DD_NN_ANIMALID`.
-- Infer `animalID` as the third underscore-delimited field.
-- Treat this path rule and `expID` format as fixed for this skill.
+- Infer `animalID` as the third underscore-delimited field when not using `paths.find_paths()`.
+- Treat this `expID` format as fixed for this skill.
 - Verify the resolved path exists before doing deeper work.
 
 ## What To Inspect First
@@ -84,6 +135,10 @@ Use `references/data-layout.md` for the observed schema and known variations.
 
 - Processed calcium recordings in `recordings/s2p_ch*.pickle` can include `OriginalSuite2pCellIDs`, a row-aligned array mapping each processed neuron row back to its original Suite2p ROI index.
 - Expect `recordings/s2p_ch0.pickle` to hold continuous neural traces with time vector `t`.
+- Per-plane Suite2p folders can also contain saved Timeline-derived microscope frame timing arrays:
+  - `timeline_frame_times.npy`
+  - `timeline_frame_start_times.npy`
+  - `timeline_output_times.npy`
 - In multi-channel Suite2p experiments, ROI detection outputs and extracted traces are commonly split by functional channel:
   - the first/green functional channel uses the root `suite2p/planeN/` tree
   - the second/red functional channel uses the parallel `ch2/suite2p/planeN/` tree
@@ -152,6 +207,81 @@ Current preprocessing links them as follows.
 Trial onset is defined from Bonvision trial numbers.
 
 - A new trial begins when the `Trial` value in `expID + '_FrameEvents.csv'` increments.
+
+## Microscope Frame Timing
+
+- The authoritative absolute timebase for two-photon frames is Timeline, not the Suite2p `.bin` itself.
+- Frame times are derived from positive-going transitions in the relevant Timeline microscope TTL channel.
+- Standard non-mesoscope experiments use the Timeline channel `MicroscopeFrames`.
+- Mesoscope experiments use:
+  - `MicroscopeFrames` for scan path `P1`
+  - `MicroscopeFrames2` for scan path `P2`
+- Plane timing is formed by counting `plane*` folders and deinterleaving the pulse train:
+  - plane `i` uses every `depthCount`-th pulse starting at offset `i`
+  - in code terms: `frame_times[iDepth::depthCount]`
+- Standard preprocessing stores mid-frame times in `timeline_frame_times.npy` and trigger-edge times in `timeline_frame_start_times.npy`.
+- Mesoscope preprocessing currently stores the detected pulse times as both `timeline_frame_times.npy` and `timeline_frame_start_times.npy`.
+- `timeline_output_times.npy` is the common 30 Hz resampled Timeline grid used for processed continuous calcium traces in `recordings/s2p_ch*.pickle["t"]`.
+
+## Aligning Microscope Frames To Trial Onset
+
+- Trial start times from `*_all_trials.csv["time"]` are already in Timeline time.
+- Saved microscope frame times are also in Timeline time.
+- Therefore align microscope frames to stimulus onset by direct subtraction:
+  - `t_rel = frame_time - trial_start_time`
+- For a given trial, select frames whose `t_rel` falls inside the requested pre/post window.
+- If the experiment is multiplane, multi-ROI, or multi-path, do this separately for each relevant `plane*` folder because each folder has its own saved frame-time array.
+- Use the folder layout to interpret what each timing file belongs to:
+  - standard: `suite2p/planeN/` or `ch2/suite2p/planeN/`
+  - mesoscope: `P{path}/{roi}/suite2p/planeN/` or `P{path}/{roi}/ch2/suite2p/planeN/`
+- When generating stimulus-aligned registered movies from Suite2p outputs, match frame indices in the registered movie source to indices in `timeline_frame_times.npy` from the same plane folder.
+
+## Reading Imaging Frames Directly From Suite2p Binaries
+
+- The correct direct-reading source for registered imaging frames is the `data.bin` file inside the relevant Suite2p `plane*` folder.
+- For second-channel reads, inspect the channel-specific plane folder first:
+  - standard: `ch2/suite2p/planeN/`
+  - mesoscope: `P{path}/{roi}/ch2/suite2p/planeN/`
+- In that channel-specific folder, read whichever registered binary actually exists:
+  - usually `data.bin`
+  - sometimes `data_chan2.bin`
+- Do not guess frame shape from file length alone.
+- Before reshaping frames from `data.bin`, inspect the colocated `ops.npy` and use:
+  - `Ly` for frame height
+  - `Lx` for frame width
+- If `Ly`/`Lx` are missing, `meanImg.shape` is an acceptable fallback for frame size.
+- The correct direct-reading workflow is:
+  1. Resolve the correct `plane*` folder for the desired path / ROI / channel / plane.
+  2. For channel 2, switch to the `ch2/suite2p/planeN/` tree when it exists.
+  3. Load `timeline_frame_times.npy` from that same folder.
+  4. Load `ops.npy` from that same folder and read `Ly` / `Lx`.
+  5. Memory-map the registered binary that exists there, usually `data.bin` but sometimes `data_chan2.bin`, as `int16`.
+  6. Compute frame count as `mm.size // (Ly * Lx)` and verify it matches the saved timing array closely.
+  7. Convert the requested Timeline-time window into frame indices using `timeline_frame_times.npy`.
+  8. Reshape only the relevant part of the binary as `(n_frames, Ly, Lx)` and index the selected frames.
+- For mesoscope experiments, do this independently for each selected `P{path}/{roi}/suite2p/planeN/` tree.
+- For standard experiments, do this independently for each selected `suite2p/planeN/` tree and, when present, each `ch2/suite2p/planeN/` tree.
+- If `timeline_frame_times.npy` is missing, do not estimate timing from frame rate alone; backfill the saved timing files first.
+
+## Backfilling Missing Microscope Timing Files
+
+- If `timeline_frame_times.npy` is missing from the relevant `plane*` folder, do not guess frame times from `ops.npy` or frame rate alone.
+- Prefer rerunning the relevant `lab_pipeline` Step 2/Suite2p postprocessing path so timing files are generated by the current pipeline.
+- Legacy backfill helpers are retained in `lab_pipeline/legacy/preprocess_py/helper/` for reference if a one-off recovery is needed.
+- For standard experiments, run:
+  - `python /home/adamranson/code/lab_pipeline/legacy/preprocess_py/helper/backfill_s2p_frame_times.py --userID USER --expID EXPID`
+- For mesoscope experiments, run:
+  - `python /home/adamranson/code/lab_pipeline/legacy/preprocess_py/helper/backfill_s2p_meso_frame_times.py --userID USER --expID EXPID`
+- These helpers save the same per-plane files that the main preprocessing scripts now write:
+  - `timeline_frame_times.npy`
+  - `timeline_frame_start_times.npy`
+  - `timeline_output_times.npy`
+- Standard backfill reproduces the standard preprocessing convention:
+  - `timeline_frame_times.npy` stores mid-frame times
+  - `timeline_frame_start_times.npy` stores trigger-edge times
+- Mesoscope backfill reproduces the current mesoscope preprocessing convention:
+  - `timeline_frame_times.npy` and `timeline_frame_start_times.npy` both store the detected pulse times
+- After backfilling, align frame times to trial onset exactly as above using Timeline-time subtraction.
 
 ## Flip Detection And Filtering
 
@@ -231,6 +361,10 @@ Current preprocessing detects and filters sync pulses as follows.
 - Treat cut `t` as relative to trial onset, not absolute Timeline time.
 - Treat extra cut products such as OASIS-derived files as optional.
 - Check shapes directly before indexing; at least one inspected eye cut file had `frame` shaped `(trials + 1, time)` while sibling arrays were `(trials, time)`.
+- If the user wants stimulus-aligned trial analysis, prefer existing `cut/` data and do not silently substitute raw continuous traces plus Timeline or Bonvision files.
+- If the relevant cut traces are missing, explicitly warn that the trial-aligned products were not found.
+- In that case, suggest running pipeline step 2 to generate the cut data.
+- Do not attempt stimulus alignment yourself unless the user explicitly asks for that lower-level alignment work.
 
 ## Reporting Rules
 
