@@ -144,6 +144,137 @@ Use `references/data-layout.md` for the observed schema and known variations.
 - Do not assume only one feature exists. One inspected experiment had only `F1_*`; another had both `F1_*` and `F2_*`.
 - Do not assume a given feature type. Observed values included `movie` and `grating`.
 
+## Opto Stimulation Schema And Timing
+
+Optogenetic stimulation experiments have an experiment-specific schema snapshot
+in the raw experiment directory. After resolving `exp_dir_raw`, first look for:
+
+```text
+{exp_dir_raw}/schema.yaml
+```
+
+Use this raw-experiment copy as the authoritative description of stimulation
+patterns used for that experiment. Do not silently substitute the current shared
+schema library, because it may have changed after acquisition. If the raw
+snapshot is absent, report that stimulation coordinates and planned timing cannot
+be reconstructed safely.
+
+The YAML contains two linked levels:
+
+- `patterns`: named stimulation patterns. Each pattern contains `duration_s`,
+  `frequency_hz`, `duty_cycle`, `power_percent`, and a `cells` list.
+- `sequences`: named ordered lists of pattern steps. Each step contains a pattern
+  name plus `start_s` and `end_s` relative to sequence/trial onset.
+
+Each cell entry supplies photostimulation target coordinates:
+
+- `x`, `y`: lateral photostimulation coordinates in the schema/ScanImage
+  coordinate system, not Suite2p pixel coordinates.
+- `z`: photostimulation depth.
+- `label`: schema cell label.
+- `power_scale`: optional per-cell power multiplier.
+- optional `origin_*` fields: source experiment, user, processed pipeline cell ID,
+  original Suite2p ROI ID, channel, imaging path, plane, and imaging-plane Z.
+
+Keep `z` separate from `origin_z_um`: `z` is the depth used to stimulate, while
+`origin_z_um` describes the source imaging plane.
+
+When the user confirms that the schema source experiment is spatially aligned to
+the current experiment, the source experiment's Suite2p pixel coordinates and
+ROI identity may be used to locate the corresponding cell in the current movie.
+Record this alignment assumption in the derived-data documentation and verify
+that the current movie geometry/plane matches before cropping or annotating
+frames. Do not treat schema `x`/`y` values as pixel coordinates unless an
+explicit calibration is available; prefer the aligned source Suite2p pixel
+coordinates when the alignment has been confirmed.
+
+### Mapping A Trial To A Sequence
+
+The raw experiment-info JSON contains condition definitions and trial order. For
+each Opto condition, find the feature with this form:
+
+Look for the saved experiment-parameter JSON in the raw experiment root, normally
+named `{expID}_experiment_params.json` (inspect the directory if the naming
+variant differs).
+
+```json
+{
+  "name": "opto_2p",
+  "params": {
+    "schema_name": "DEFAULT",
+    "seq_num": 0
+  }
+}
+```
+
+`seq_num` is the zero-based sequence number in the schema's sequence ordering.
+The experiment-info
+`trial_condition_indices` array maps each trial position to a condition entry;
+use that condition to obtain `opto_2p.params.seq_num`. Do not confuse the
+condition index with `seq_num`, and do not infer the sequence from the trial row
+number alone.
+
+Then resolve the sequence and expand each step through its referenced pattern.
+One sequence can contain many patterns, and the same pattern can occur more than
+once at different times.
+
+### Reconstructing Stimulus Times And Coordinates
+
+Treat schema timing as authoritative for the intended stimulation schedule. If a
+trial starts at absolute time `trial_start` and a sequence step has `start_s` and
+`end_s`, use:
+
+```text
+stimulus_start = trial_start + sequence_step.start_s
+stimulus_end   = trial_start + sequence_step.end_s
+```
+
+For every interval, attach all cells from the referenced pattern, including their
+`x`, `y`, `z`, `power_scale`, and pattern-level stimulation parameters. This gives
+the coordinate stimulated at each time relative to trial onset.
+
+Pattern-level parameters mean:
+
+- `duration_s` is the pattern duration and normally agrees with
+  `end_s - start_s`.
+- `frequency_hz` and `duty_cycle` describe the temporal waveform within that
+  interval.
+- `power_percent` is configured per cell; ScanImage group power can additionally
+  reflect cell count and each cell's `power_scale`.
+
+Use the trial table's `time` as `trial_start` when it is the Timeline trial-onset
+time documented above. Preserve the trial index, condition index, sequence number, sequence name, pattern
+occurrence index, and cell identity in any derived event table. Schema-derived
+times are the intended times relative to trial onset; no separate hardware
+trigger measurement is required unless explicit timing validation is requested.
+
+Recommended expanded event representation:
+
+```python
+{
+    "trial_index": 12,
+    "condition_index": 3,
+    "schema_name": "DEFAULT",
+    "seq_num": 0,
+    "sequence_name": "sequence_name",
+    "pattern_name": "pattern_name",
+    "pattern_occurrence": 1,
+    "start_s": 1.0,
+    "end_s": 2.0,
+    "cells": [
+        {
+            "label": "cell_7",
+            "x": 12.3,
+            "y": -4.5,
+            "z": 50.0,
+            "power_scale": 1.0,
+            "origin_processed_cell_id": 7,
+            "origin_suite2p_roi_id": 19,
+        }
+    ],
+}
+```
+
 ## Movie Feature Rules
 
 - For movie features, the authoritative movie source field is the feature `name` parameter:
@@ -278,7 +409,23 @@ Trial onset is defined from Bonvision trial numbers.
   - mesoscope: `P{path}/{roi}/suite2p/planeN/` or `P{path}/{roi}/ch2/suite2p/planeN/`
 - When generating stimulus-aligned registered movies from Suite2p outputs, match frame indices in the registered movie source to indices in `timeline_frame_times.npy` from the same plane folder.
 
+### Suite2p `data.bin` dtype check
+
+- Do not assume that Suite2p `suite2p/planeN/data.bin` is float32. In the lab repository, verified processed `data.bin` files may be stored as signed 16-bit integers (`int16`), while companion arrays such as `F.npy` may use a different dtype.
+- Before memory-mapping a `data.bin`, inspect `ops.npy` and the file size, verify that the candidate dtype and `(nframes, Ly, Lx)` shape account for the file bytes, and confirm that the resulting frame count is compatible with `timeline_frame_times.npy`.
+- Prefer the dtype recorded or implied by the actual file layout; never infer dtype from the dtype of `F.npy` or from a generic Suite2p default.
+
 ## Reading Imaging Frames Directly From Suite2p Binaries
+
+## Stimulus-aligned cell-response videos
+
+- For a cell-average response movie, group events by the cell identity carried by the expanded opto event table. For each cell and each requested relative time, select the current-experiment imaging frame nearest to `stimulus_start_timeline_s + relative_time`, then average those full frames across all available events for that cell. Do not average a single global set of events across cells.
+- Cell-specific full-frame movies can be concatenated sequentially into one video. Keep the native registered frame dimensions when the purpose is to inspect spatial alignment; resizing to a convenient montage size can make coordinate errors and apparent motion harder to diagnose.
+- When the source experiment is confirmed spatially aligned to the current experiment, use the source Suite2p pixel coordinates stored in schema `origin` metadata for both ROI extraction and frame annotations. A fixed circle centered at those coordinates is a useful spatial QC marker.
+- For temporal alignment, use absolute Timeline frame timestamps and nearest-frame lookup. Do not compute frame indices as `stimulus_time * fs` unless the acquisition time origin has explicitly been verified; the first stored imaging frame need not occur at Timeline time zero.
+- If saved `timeline_frame_times.npy` is absent but explicit alignment work is requested, a validated fallback is to detect positive-going transitions in the relevant Timeline microscope TTL channel, trim the resulting pulse list to the registered binary frame count, and record that fallback and pulse-count check in the video sidecar. Prefer the saved pipeline timing array or a pipeline backfill whenever available.
+- A moving-average window applied before event averaging should be described separately from the across-trial average. For example, a centered 10-frame temporal average is applied to each event-matched frame first, followed by the pixel-wise mean across that cell's events.
+- Changing the encoded FPS changes playback duration only when the original frame sequence is preserved and timestamps are retimed. Merely duplicating frames to reach a higher FPS does not make the underlying response play faster. If audio is present, retime it by the same factor and verify the encoded FPS, frame count, and duration after muxing.
 
 - The correct direct-reading source for registered imaging frames is the `data.bin` file inside the relevant Suite2p `plane*` folder.
 - For second-channel reads, inspect the channel-specific plane folder first:

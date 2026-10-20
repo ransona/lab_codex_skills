@@ -319,6 +319,59 @@ Channel meanings supplied later:
 
 The cut `t` vector is relative to trial onset.
 
+## Raw Opto Schema
+
+For an experiment using 2P Opto Tools, inspect the raw experiment root for:
+
+```text
+{exp_dir_raw}/schema.yaml
+```
+
+This experiment-time schema snapshot should be preferred over the current shared
+schema repository. It contains named `patterns` and named `sequences`. A pattern
+contains its duration, frequency, duty cycle, power, and target `cells`; a
+sequence contains ordered pattern steps with `start_s` and `end_s` relative to
+sequence/trial onset.
+
+The raw experiment-info JSON, normally `{expID}_experiment_params.json` in the
+same raw experiment root, links trials to sequences. Each Opto condition has an
+`opto_2p` feature whose parameters include `schema_name` and a zero-based
+`seq_num`, for example:
+
+```json
+{"name":"opto_2p","params":{"schema_name":"DEFAULT","seq_num":0}}
+```
+
+The `trial_condition_indices` array maps each trial position to its condition;
+follow that mapping before reading `seq_num`. A sequence can contain multiple
+pattern steps, and a pattern can be reused at multiple step times.
+
+To reconstruct stimulation events:
+
+1. Resolve the raw schema and experiment-info JSON.
+2. Map trial index to condition index using `trial_condition_indices`.
+3. Read that condition's `opto_2p.params.seq_num`.
+4. Resolve the corresponding schema sequence.
+5. Expand every sequence step to its named pattern.
+6. Use `start_s` and `end_s` as the intended times relative to trial onset.
+7. Attach every cell in the pattern, including its `x`, `y`, `z`, label, and
+   optional power/origin metadata.
+
+Use the trial table's `time` field as `trial_start` when an absolute time is
+needed. If `trial_start` is the trial's absolute start time, the intended absolute
+event interval is:
+
+```text
+absolute_start = trial_start + start_s
+absolute_end   = trial_start + end_s
+```
+
+Schema `x`, `y`, and `z` are photostimulation coordinates, not Suite2p pixel
+coordinates. Preserve `origin_processed_cell_id` and `origin_suite2p_roi_id`
+when present so a stimulated target can be related back to the imaging ROI.
+Treat schema timing as authoritative intended timing; separate hardware trigger
+measurements are only needed for explicit timing-validation analysis.
+
 ## Config Pickles
 
 ### `pipeline_config.pickle`
